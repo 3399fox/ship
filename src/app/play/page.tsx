@@ -570,6 +570,7 @@ function PlayPageClient() {
   const [videoLoadingStage, setVideoLoadingStage] = useState<
     'initing' | 'sourceChanging'
   >('initing');
+  const [videoError, setVideoError] = useState<string | null>(null);
 
   // 播放器就绪状态（用于触发 usePlaySync 的事件监听器设置）
   const [playerReady, setPlayerReady] = useState(false);
@@ -1939,6 +1940,7 @@ function PlayPageClient() {
       // 显示换源加载状态
       setVideoLoadingStage('sourceChanging');
       setIsVideoLoading(true);
+      setVideoError(null);
 
       // 记录当前播放进度（仅在同一集数切换时恢复）
       const currentPlayTime = artPlayerRef.current?.currentTime || 0;
@@ -2958,6 +2960,32 @@ function PlayPageClient() {
               if (data.fatal) {
                 switch (data.type) {
                   case Hls.ErrorTypes.NETWORK_ERROR:
+                    // 检查是否是 manifest 加载错误（通常是 403/404/CORS 错误）
+                    if (data.details === 'manifestLoadError') {
+                      console.log('Manifest 加载失败：可能是 403/404 或 CORS 错误');
+                      hls.destroy();
+                      // 检查是否有响应码
+                      const statusCode = data.response?.code || data.response?.status;
+                      if (statusCode === 403) {
+                        setVideoError('访问被拒绝 (403)');
+                      } else if (statusCode === 404) {
+                        setVideoError('视频不存在 (404)');
+                      } else if (statusCode) {
+                        setVideoError(`HTTP ${statusCode} 错误`);
+                      } else {
+                        // CORS 错误或其他网络错误
+                        setVideoError('无法访问视频源（可能是跨域限制或访问被拒绝）');
+                      }
+                      return;
+                    }
+                    // 检查其他 HTTP 错误状态码
+                    const statusCode = data.response?.code || data.response?.status;
+                    if (statusCode && statusCode >= 400) {
+                      console.log(`HTTP ${statusCode} 错误`);
+                      hls.destroy();
+                      setVideoError(`HTTP ${statusCode} 错误`);
+                      return;
+                    }
                     console.log('网络错误，尝试恢复...');
                     hls.startLoad();
                     break;
@@ -2968,6 +2996,7 @@ function PlayPageClient() {
                   default:
                     console.log('无法恢复的错误');
                     hls.destroy();
+                    setVideoError('视频加载错误');
                     break;
                 }
               }
@@ -3813,6 +3842,7 @@ function PlayPageClient() {
 
         // 隐藏换源加载状态
         setIsVideoLoading(false);
+        setVideoError(null);
       });
 
       // 监听视频时间更新事件，实现跳过片头片尾
@@ -4334,39 +4364,77 @@ function PlayPageClient() {
                 ></div>
 
                 {/* 换源加载蒙层 */}
-                {isVideoLoading && (
+                {(isVideoLoading || videoError) && (
                   <div className='absolute inset-0 bg-black/85 backdrop-blur-sm rounded-xl flex items-center justify-center z-[500] transition-all duration-300'>
                     <div className='text-center max-w-md mx-auto px-6'>
-                      {/* 动画影院图标 */}
-                      <div className='relative mb-8'>
-                        <div className='relative mx-auto w-24 h-24 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl shadow-2xl flex items-center justify-center transform hover:scale-105 transition-transform duration-300'>
-                          <div className='text-white text-4xl'>🎬</div>
-                          {/* 旋转光环 */}
-                          <div className='absolute -inset-2 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl opacity-20 animate-spin'></div>
-                        </div>
+                      {videoError ? (
+                        // 错误显示
+                        <>
+                          {/* 错误图标 */}
+                          <div className='relative mb-8'>
+                            <div className='relative mx-auto w-24 h-24 bg-gradient-to-r from-red-500 to-rose-600 rounded-2xl shadow-2xl flex items-center justify-center'>
+                              <div className='text-white text-4xl'>⚠️</div>
+                            </div>
+                          </div>
 
-                        {/* 浮动粒子效果 */}
-                        <div className='absolute top-0 left-0 w-full h-full pointer-events-none'>
-                          <div className='absolute top-2 left-2 w-2 h-2 bg-green-400 rounded-full animate-bounce'></div>
-                          <div
-                            className='absolute top-4 right-4 w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce'
-                            style={{ animationDelay: '0.5s' }}
-                          ></div>
-                          <div
-                            className='absolute bottom-3 left-6 w-1 h-1 bg-lime-400 rounded-full animate-bounce'
-                            style={{ animationDelay: '1s' }}
-                          ></div>
-                        </div>
-                      </div>
+                          {/* 错误消息 */}
+                          <div className='space-y-4'>
+                            <p className='text-xl font-semibold text-white'>
+                              播放失败
+                            </p>
+                            <p className='text-base text-gray-300'>
+                              {videoError}
+                            </p>
+                            <button
+                              onClick={() => {
+                                setVideoError(null);
+                                setIsVideoLoading(true);
+                                // 重新加载视频
+                                if (artPlayerRef.current) {
+                                  artPlayerRef.current.url = videoUrl;
+                                }
+                              }}
+                              className='mt-4 px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all duration-200'
+                            >
+                              重试
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        // 加载显示
+                        <>
+                          {/* 动画影院图标 */}
+                          <div className='relative mb-8'>
+                            <div className='relative mx-auto w-24 h-24 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl shadow-2xl flex items-center justify-center transform hover:scale-105 transition-transform duration-300'>
+                              <div className='text-white text-4xl'>🎬</div>
+                              {/* 旋转光环 */}
+                              <div className='absolute -inset-2 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl opacity-20 animate-spin'></div>
+                            </div>
 
-                      {/* 换源消息 */}
-                      <div className='space-y-2'>
-                        <p className='text-xl font-semibold text-white animate-pulse'>
-                          {videoLoadingStage === 'sourceChanging'
-                            ? '🔄 切换播放源...'
-                            : '🔄 视频加载中...'}
-                        </p>
-                      </div>
+                            {/* 浮动粒子效果 */}
+                            <div className='absolute top-0 left-0 w-full h-full pointer-events-none'>
+                              <div className='absolute top-2 left-2 w-2 h-2 bg-green-400 rounded-full animate-bounce'></div>
+                              <div
+                                className='absolute top-4 right-4 w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce'
+                                style={{ animationDelay: '0.5s' }}
+                              ></div>
+                              <div
+                                className='absolute bottom-3 left-6 w-1 h-1 bg-lime-400 rounded-full animate-bounce'
+                                style={{ animationDelay: '1s' }}
+                              ></div>
+                            </div>
+                          </div>
+
+                          {/* 换源消息 */}
+                          <div className='space-y-2'>
+                            <p className='text-xl font-semibold text-white animate-pulse'>
+                              {videoLoadingStage === 'sourceChanging'
+                                ? '🔄 切换播放源...'
+                                : '🔄 视频加载中...'}
+                            </p>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
